@@ -62,67 +62,177 @@ def tile_images(imgs, picturesPerRow=4):
 # Converts a Tensor into a Numpy array
 # |imtype|: the desired type of the converted numpy array
 def tensor2im(image_tensor, imtype=np.uint8, normalize=True, tile=False):
-    if isinstance(image_tensor, list):
-        image_numpy = []
-        for i in range(len(image_tensor)):
-            image_numpy.append(tensor2im(image_tensor[i], imtype, normalize))
-        return image_numpy
+    """
+    Converts a PyTorch tensor (or nested data structures containing tensors)
+    into a NumPy array for visualization.
+    """
 
+    # 1) If it's a dictionary, apply the transform to each value
+    if isinstance(image_tensor, dict):
+        output_dict = {}
+        for key, val in image_tensor.items():
+            output_dict[key] = tensor2im(val, imtype, normalize, tile)
+        return output_dict
+
+    # 2) If it's a list, apply the transform to each element
+    if isinstance(image_tensor, list):
+        return [tensor2im(elem, imtype, normalize, tile) for elem in image_tensor]
+
+    # 3) If it's already a NumPy array or something else, just return it
+    #    (Or raise an error if you strictly expect a torch.Tensor)
+    if not torch.is_tensor(image_tensor):
+        # Optionally return as-is:
+        return image_tensor
+
+    # Now assume image_tensor is actually a PyTorch tensor
     if image_tensor.dim() == 4:
         # transform each image in the batch
         images_np = []
         for b in range(image_tensor.size(0)):
             one_image = image_tensor[b]
-            one_image_np = tensor2im(one_image)
+            one_image_np = tensor2im(one_image, imtype, normalize, tile=False)
+            # add a batch dimension after conversion
             images_np.append(one_image_np.reshape(1, *one_image_np.shape))
         images_np = np.concatenate(images_np, axis=0)
+        # If tile=True, tile them together into one big image
         if tile:
-            images_tiled = tile_images(images_np)
-            return images_tiled
+            return tile_images(images_np)
         else:
             return images_np
 
+    # If only one image in the tensor (i.e., dim=2 or dim=3)
     if image_tensor.dim() == 2:
+        # add a channel dimension
         image_tensor = image_tensor.unsqueeze(0)
+
+    # Convert to numpy
     image_numpy = image_tensor.detach().cpu().float().numpy()
+
     if normalize:
-        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1.0) / 2.0 * 255.0
     else:
         image_numpy = np.transpose(image_numpy, (1, 2, 0)) * 255.0
+
     image_numpy = np.clip(image_numpy, 0, 255)
+
+    # If it's a single-channel image, drop the redundant channel dimension
     if image_numpy.shape[2] == 1:
         image_numpy = image_numpy[:, :, 0]
+
     return image_numpy.astype(imtype)
 
 
-# Converts a one-hot tensor into a colorful label map
 def tensor2label(label_tensor, n_label, imtype=np.uint8, tile=False):
+    """
+    Converts a one-hot or multi-channel label map into a colorful 3-channel label map
+    (or does the same dictionary recursion if the input is a dictionary).
+    """
+
+    # 1) If it's a dictionary, apply recursively
+    if isinstance(label_tensor, dict):
+        output_dict = {}
+        for key, val in label_tensor.items():
+            output_dict[key] = tensor2label(val, n_label, imtype, tile)
+        return output_dict
+
+    # 2) If it's a list, apply the transform to each element
+    if isinstance(label_tensor, list):
+        return [tensor2label(elem, n_label, imtype, tile) for elem in label_tensor]
+
+    if not torch.is_tensor(label_tensor):
+        # Optionally return as-is:
+        return label_tensor
+
     if label_tensor.dim() == 4:
-        # transform each image in the batch
         images_np = []
         for b in range(label_tensor.size(0)):
             one_image = label_tensor[b]
-            one_image_np = tensor2label(one_image, n_label, imtype)
+            one_image_np = tensor2label(one_image, n_label, imtype, tile=False)
             images_np.append(one_image_np.reshape(1, *one_image_np.shape))
         images_np = np.concatenate(images_np, axis=0)
         if tile:
-            images_tiled = tile_images(images_np)
-            return images_tiled
+            return tile_images(images_np)
         else:
-            images_np = images_np[0]
+            # If you want to return the batch, do so; otherwise just the first
             return images_np
 
+    # If it's a single-image label
     if label_tensor.dim() == 1:
+        # trivial return - or however you want to handle 1D
         return np.zeros((64, 64, 3), dtype=np.uint8)
+
     if n_label == 0:
         return tensor2im(label_tensor, imtype)
+
     label_tensor = label_tensor.cpu().float()
-    if label_tensor.size()[0] > 1:
+    if label_tensor.size(0) > 1:
         label_tensor = label_tensor.max(0, keepdim=True)[1]
     label_tensor = Colorize(n_label)(label_tensor)
     label_numpy = np.transpose(label_tensor.numpy(), (1, 2, 0))
-    result = label_numpy.astype(imtype)
-    return result
+    return label_numpy.astype(imtype)
+
+# def tensor2im(image_tensor, imtype=np.uint8, normalize=True, tile=False):
+#     if isinstance(image_tensor, list):
+#         image_numpy = []
+#         for i in range(len(image_tensor)):
+#             image_numpy.append(tensor2im(image_tensor[i], imtype, normalize))
+#         return image_numpy
+
+#     if image_tensor.dim() == 4:
+#         # transform each image in the batch
+#         images_np = []
+#         for b in range(image_tensor.size(0)):
+#             one_image = image_tensor[b]
+#             one_image_np = tensor2im(one_image)
+#             images_np.append(one_image_np.reshape(1, *one_image_np.shape))
+#         images_np = np.concatenate(images_np, axis=0)
+#         if tile:
+#             images_tiled = tile_images(images_np)
+#             return images_tiled
+#         else:
+#             return images_np
+
+#     if image_tensor.dim() == 2:
+#         image_tensor = image_tensor.unsqueeze(0)
+#     image_numpy = image_tensor.detach().cpu().float().numpy()
+#     if normalize:
+#         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+#     else:
+#         image_numpy = np.transpose(image_numpy, (1, 2, 0)) * 255.0
+#     image_numpy = np.clip(image_numpy, 0, 255)
+#     if image_numpy.shape[2] == 1:
+#         image_numpy = image_numpy[:, :, 0]
+#     return image_numpy.astype(imtype)
+
+
+# # Converts a one-hot tensor into a colorful label map
+# def tensor2label(label_tensor, n_label, imtype=np.uint8, tile=False):
+#     if label_tensor.dim() == 4:
+#         # transform each image in the batch
+#         images_np = []
+#         for b in range(label_tensor.size(0)):
+#             one_image = label_tensor[b]
+#             one_image_np = tensor2label(one_image, n_label, imtype)
+#             images_np.append(one_image_np.reshape(1, *one_image_np.shape))
+#         images_np = np.concatenate(images_np, axis=0)
+#         if tile:
+#             images_tiled = tile_images(images_np)
+#             return images_tiled
+#         else:
+#             images_np = images_np[0]
+#             return images_np
+
+#     if label_tensor.dim() == 1:
+#         return np.zeros((64, 64, 3), dtype=np.uint8)
+#     if n_label == 0:
+#         return tensor2im(label_tensor, imtype)
+#     label_tensor = label_tensor.cpu().float()
+#     if label_tensor.size()[0] > 1:
+#         label_tensor = label_tensor.max(0, keepdim=True)[1]
+#     label_tensor = Colorize(n_label)(label_tensor)
+#     label_numpy = np.transpose(label_tensor.numpy(), (1, 2, 0))
+#     result = label_numpy.astype(imtype)
+#     return result
 
 
 def save_image(image_numpy, image_path, create_dir=False):
